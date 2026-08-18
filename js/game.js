@@ -1,26 +1,48 @@
 import {
   COLORS,
+  BIRD_W,
+  BIRD_H,
+  PIPE_BODY_W,
+  PIPE_CAP_W,
+  PIPE_CAP_H,
+  GROUND_TILE_W,
+  GROUND_H,
+  CLOUD_H,
+  CITY_H,
+  BUSH_H,
   createBirdFrames,
-  createPipeSprite,
-  createGroundPattern,
-  createCityscape,
+  createPipeParts,
+  createGroundTile,
+  createCloudLayer,
+  createCityLayer,
+  createBushLayer,
+  createMedal,
+  drawText,
   drawScore,
-  drawOutlinedText,
+  drawPanel,
+  drawButton,
 } from "./sprites.js";
 
 const W = 288;
 const H = 512;
-const GROUND_H = 112;
 const PLAY_H = H - GROUND_H;
-const BIRD_X = 64;
+
+// backdrop bands (bottom aligned to the ground line)
+const BUSH_Y = PLAY_H - BUSH_H;
+const CITY_Y = BUSH_Y - CITY_H + 8;
+const CLOUD_Y = CITY_Y - CLOUD_H + 6;
+
+const BIRD_SCALE = 2;
+const BIRD_DRAW_W = BIRD_W * BIRD_SCALE;
+const BIRD_DRAW_H = BIRD_H * BIRD_SCALE;
+const BIRD_X = 68;
+
 const GRAVITY = 0.42;
 const FLAP = -6.8;
-const PIPE_W = 52;
-const PIPE_GAP = 118;
+const PIPE_W = PIPE_CAP_W;
+const PIPE_GAP = 120;
 const PIPE_SPEED = 2.15;
-const PIPE_SPACING = 168;
-const BIRD_W = 34;
-const BIRD_H = 24;
+const PIPE_SPACING = 172;
 
 const State = {
   TITLE: "title",
@@ -44,9 +66,17 @@ export class Game {
     this.ctx.imageSmoothingEnabled = false;
 
     this.birdFrames = createBirdFrames();
-    this.groundPat = createGroundPattern();
-    this.city = createCityscape(W * 2, 72);
-    this.pipeCache = new Map();
+    this.pipe = createPipeParts();
+    this.ground = createGroundTile();
+    this.clouds = createCloudLayer(W);
+    this.city = createCityLayer(W);
+    this.bushes = createBushLayer(W);
+    this.medals = {
+      bronze: createMedal("bronze"),
+      silver: createMedal("silver"),
+      gold: createMedal("gold"),
+      platinum: createMedal("platinum"),
+    };
 
     this.best = Number(localStorage.getItem("flappyclone_best") || 0);
     this.reset(true);
@@ -69,12 +99,13 @@ export class Game {
     };
     this.pipes = [];
     this.score = 0;
+    this.newBest = false;
     this.scroll = 0;
     this.groundX = 0;
     this.flash = 0;
     this.deadT = 0;
     this.readyT = 0;
-    this.spawnX = W + 20;
+    this.spawnX = W + 30;
   }
 
   _bindInput() {
@@ -114,14 +145,6 @@ export class Game {
     }
   }
 
-  getPipeSprite(height, isTop) {
-    const key = `${isTop ? "t" : "b"}:${height}`;
-    if (!this.pipeCache.has(key)) {
-      this.pipeCache.set(key, createPipeSprite(height, isTop));
-    }
-    return this.pipeCache.get(key);
-  }
-
   _ensurePipes() {
     while (this.pipes.length < 4) {
       const last = this.pipes[this.pipes.length - 1];
@@ -131,14 +154,9 @@ export class Game {
   }
 
   _makePipe(x) {
-    const margin = 36;
+    const margin = 48;
     const gapY = margin + Math.random() * (PLAY_H - PIPE_GAP - margin * 2);
-    return {
-      x,
-      gapY,
-      gapH: PIPE_GAP,
-      scored: false,
-    };
+    return { x, gapY, gapH: PIPE_GAP, scored: false };
   }
 
   loop(t) {
@@ -150,15 +168,12 @@ export class Game {
   }
 
   update(dt) {
-    const moving =
-      this.state === State.PLAY || this.state === State.TITLE || this.state === State.READY;
-
-    if (moving && (this.state !== State.DEAD)) {
-      this.groundX = (this.groundX - PIPE_SPEED * (this.state === State.PLAY ? 1 : 0.7)) % 24;
-      this.scroll += dt;
+    if (this.state !== State.DEAD) {
+      const speed = this.state === State.PLAY ? 1 : 0.7;
+      this.groundX = (this.groundX - PIPE_SPEED * speed) % GROUND_TILE_W;
+      this.scroll += dt * speed;
     }
 
-    // idle bob on title/ready
     if (this.state === State.TITLE || this.state === State.READY) {
       this.bird.y = PLAY_H * 0.42 + Math.sin(this.scroll * 4.2) * 6;
       this.bird.vy = 0;
@@ -192,6 +207,7 @@ export class Game {
           this.score += 1;
           if (this.score > this.best) {
             this.best = this.score;
+            this.newBest = true;
             localStorage.setItem("flappyclone_best", String(this.best));
           }
         }
@@ -207,21 +223,16 @@ export class Game {
       this.bird.vy += GRAVITY * 1.15;
       this.bird.y += this.bird.vy;
       this.bird.rot = clamp(this.bird.rot + dt * 4, -0.5, 1.5);
-      if (this.bird.y + BIRD_H / 2 > PLAY_H - 2) {
-        this.bird.y = PLAY_H - BIRD_H / 2 - 2;
+      if (this.bird.y + BIRD_DRAW_H / 2 > PLAY_H - 2) {
+        this.bird.y = PLAY_H - BIRD_DRAW_H / 2 - 2;
         this.bird.vy = 0;
       }
     }
   }
 
   _birdHitbox() {
-    // tighter than sprite for fair gameplay
-    return {
-      x: this.bird.x - 10,
-      y: this.bird.y - 8,
-      w: 20,
-      h: 16,
-    };
+    // slightly tighter than the sprite for fair gameplay
+    return { x: this.bird.x - 12, y: this.bird.y - 9, w: 24, h: 18 };
   }
 
   _collides() {
@@ -251,53 +262,23 @@ export class Game {
     this.bird.vy = Math.min(this.bird.vy, 0);
   }
 
+  /* ------------------------------------------------------------ drawing */
+
   draw() {
     const ctx = this.ctx;
-    ctx.clearRect(0, 0, W, H);
+    ctx.imageSmoothingEnabled = false;
 
-    // sky
     ctx.fillStyle = COLORS.sky;
     ctx.fillRect(0, 0, W, H);
 
-    // soft vertical tint
-    const g = ctx.createLinearGradient(0, 0, 0, PLAY_H);
-    g.addColorStop(0, "rgba(255,255,255,0.08)");
-    g.addColorStop(1, "rgba(0,0,0,0.04)");
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, PLAY_H);
+    this._drawBackdrop();
 
-    // city parallax
-    const cityY = PLAY_H - this.city.height + 4;
-    const cx = -((this.scroll * 12) % W);
-    ctx.globalAlpha = 0.55;
-    ctx.drawImage(this.city, cx, cityY);
-    ctx.drawImage(this.city, cx + W, cityY);
-    ctx.globalAlpha = 1;
+    if (this.state === State.PLAY || this.state === State.DEAD) this._drawPipes();
 
-    // pipes
-    if (this.state === State.PLAY || this.state === State.DEAD) {
-      for (const p of this.pipes) {
-        const topH = Math.max(1, Math.floor(p.gapY));
-        const botY = Math.floor(p.gapY + p.gapH);
-        const botH = Math.max(1, PLAY_H - botY);
-        const top = this.getPipeSprite(topH, true);
-        const bot = this.getPipeSprite(botH, false);
-        ctx.drawImage(top, Math.floor(p.x), 0, PIPE_W, topH);
-        ctx.drawImage(bot, Math.floor(p.x), botY, PIPE_W, botH);
-      }
-    }
-
-    // ground
     this._drawGround();
-
-    // bird
     this._drawBird();
 
-    // HUD
-    if (this.state === State.PLAY) {
-      drawScore(ctx, this.score, W / 2, 56);
-    }
-
+    if (this.state === State.PLAY) drawScore(ctx, this.score, W / 2, 40, 4);
     if (this.state === State.TITLE) this._drawTitle();
     if (this.state === State.READY) this._drawReady();
     if (this.state === State.DEAD) this._drawGameOver();
@@ -308,122 +289,114 @@ export class Game {
     }
   }
 
-  _drawGround() {
+  _tile(image, y, offset) {
     const ctx = this.ctx;
-    // dirt body
-    ctx.fillStyle = COLORS.ground;
-    ctx.fillRect(0, PLAY_H, W, GROUND_H);
-    // scrolling grass strip
-    const y = PLAY_H;
-    for (let x = Math.floor(this.groundX); x < W + 24; x += 24) {
-      ctx.drawImage(this.groundPat, x, y);
+    let x = -(offset % image.width);
+    if (x > 0) x -= image.width;
+    for (; x < W; x += image.width) ctx.drawImage(image, Math.floor(x), y);
+  }
+
+  _drawBackdrop() {
+    const shift = this.scroll * PIPE_SPEED * 60;
+    this._tile(this.clouds, CLOUD_Y, Math.floor(shift * 0.08));
+    this._tile(this.city, CITY_Y, Math.floor(shift * 0.16));
+    this._tile(this.bushes, BUSH_Y, Math.floor(shift * 0.3));
+  }
+
+  _drawPipes() {
+    const ctx = this.ctx;
+    const bodyX = Math.round((PIPE_CAP_W - PIPE_BODY_W) / 2);
+    for (const p of this.pipes) {
+      const x = Math.floor(p.x);
+      const gapTop = Math.floor(p.gapY);
+      const gapBottom = gapTop + p.gapH;
+
+      // top pipe
+      const topBodyH = Math.max(0, gapTop - PIPE_CAP_H);
+      if (topBodyH > 0) {
+        ctx.drawImage(this.pipe.body, x + bodyX, 0, PIPE_BODY_W, topBodyH);
+      }
+      ctx.drawImage(this.pipe.cap, x, Math.max(-PIPE_CAP_H, gapTop - PIPE_CAP_H));
+
+      // bottom pipe
+      const botBodyY = gapBottom + PIPE_CAP_H;
+      const botBodyH = Math.max(0, PLAY_H - botBodyY);
+      if (botBodyH > 0) {
+        ctx.drawImage(this.pipe.body, x + bodyX, botBodyY, PIPE_BODY_W, botBodyH);
+      }
+      ctx.drawImage(this.pipe.cap, x, gapBottom);
     }
-    // top outline
-    ctx.fillStyle = COLORS.outline;
-    ctx.fillRect(0, PLAY_H, W, 2);
+  }
+
+  _drawGround() {
+    this._tile(this.ground, PLAY_H, -this.groundX);
   }
 
   _drawBird() {
     const ctx = this.ctx;
     const frame = this.birdFrames[this.bird.frame];
     ctx.save();
-    ctx.translate(this.bird.x, this.bird.y);
+    ctx.translate(Math.round(this.bird.x), Math.round(this.bird.y));
     ctx.rotate(this.bird.rot);
-    ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(frame, -BIRD_W / 2, -BIRD_H / 2, BIRD_W, BIRD_H);
+    ctx.drawImage(frame, -BIRD_DRAW_W / 2, -BIRD_DRAW_H / 2, BIRD_DRAW_W, BIRD_DRAW_H);
     ctx.restore();
   }
 
   _drawTitle() {
     const ctx = this.ctx;
-    drawOutlinedText(ctx, "FLAPPY", W / 2, 120, 36, "#f5e642");
-    drawOutlinedText(ctx, "CLONE", W / 2, 158, 36, "#f5e642");
-    drawOutlinedText(ctx, "TAP TO START", W / 2, 250, 16, "#fff");
-    // decorative pipes on sides for title flavor
+    drawText(ctx, "FLAPPY", W / 2, 96, { scale: 4, fill: COLORS.title });
+    drawText(ctx, "CLONE", W / 2, 140, { scale: 4, fill: COLORS.title });
+    if (Math.floor(this.scroll * 2) % 2 === 0) {
+      drawText(ctx, "TAP TO START", W / 2, 300, { scale: 2 });
+    }
+    drawText(ctx, `BEST ${this.best}`, W / 2, 336, { scale: 2, fill: COLORS.panelLight });
   }
 
   _drawReady() {
     const ctx = this.ctx;
-    drawOutlinedText(ctx, "GET READY", W / 2, 140, 28, "#f5e642");
-    drawScore(ctx, 0, W / 2, 56);
-    // instruction hand-ish
-    drawOutlinedText(ctx, "TAP", W / 2, 290, 18, "#fff");
-    const pulse = 0.5 + 0.5 * Math.sin(this.readyT * 6);
-    ctx.save();
-    ctx.globalAlpha = 0.55 + pulse * 0.45;
-    ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(W / 2, 330, 16 + pulse * 2, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.restore();
+    drawScore(ctx, 0, W / 2, 40, 4);
+    drawText(ctx, "GET READY", W / 2, 130, { scale: 4, fill: COLORS.title });
+    if (Math.floor(this.readyT * 2) % 2 === 0) {
+      drawText(ctx, "TAP TO FLAP", W / 2, 300, { scale: 2 });
+    }
   }
 
   _drawGameOver() {
     const ctx = this.ctx;
-    drawOutlinedText(ctx, "GAME OVER", W / 2, 120, 30, "#f25a2a");
+    drawText(ctx, "GAME OVER", W / 2, 96, { scale: 4, fill: COLORS.gameOver });
 
-    // score panel
-    const pw = 210;
-    const ph = 118;
-    const px = (W - pw) / 2;
-    const py = 155;
-    ctx.fillStyle = COLORS.outline;
-    ctx.fillRect(px - 3, py - 3, pw + 6, ph + 6);
-    ctx.fillStyle = COLORS.panel;
-    ctx.fillRect(px, py, pw, ph);
-    ctx.fillStyle = COLORS.panelDark;
-    ctx.fillRect(px, py + ph - 10, pw, 10);
+    const pw = 216;
+    const ph = 108;
+    const px = Math.round((W - pw) / 2);
+    const py = 150;
+    drawPanel(ctx, px, py, pw, ph);
 
-    ctx.fillStyle = "#e86100";
-    ctx.font = 'bold 14px "Courier New", monospace';
-    ctx.textAlign = "left";
-    ctx.fillText("MEDAL", px + 16, py + 28);
-    ctx.fillText("SCORE", px + 120, py + 28);
-    ctx.fillText("BEST", px + 120, py + 78);
+    drawText(ctx, "SCORE", px + pw - 22, py + 18, { scale: 2, align: "right", fill: COLORS.gameOver });
+    drawText(ctx, String(this.score), px + pw - 22, py + 36, { scale: 3, align: "right" });
+    drawText(ctx, "BEST", px + pw - 22, py + 62, { scale: 2, align: "right", fill: COLORS.gameOver });
+    drawText(ctx, String(this.best), px + pw - 22, py + 80, { scale: 3, align: "right" });
 
-    drawScore(ctx, this.score, px + 160, py + 58, 0.7);
-    drawScore(ctx, this.best, px + 160, py + 108, 0.7);
-
-    // medal
     const medal = this._medalFor(this.score);
     if (medal) {
-      ctx.beginPath();
-      ctx.fillStyle = COLORS.outline;
-      ctx.arc(px + 52, py + 70, 24, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.fillStyle = medal;
-      ctx.arc(px + 52, py + 70, 20, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "rgba(255,255,255,0.45)";
-      ctx.beginPath();
-      ctx.arc(px + 45, py + 62, 6, 0, Math.PI * 2);
-      ctx.fill();
+      ctx.drawImage(this.medals[medal], px + 24, py + 34, 40, 40);
+    }
+    if (this.newBest) {
+      drawText(ctx, "NEW!", px + 44, py + 18, { scale: 2, fill: COLORS.gameOver });
     }
 
     if (this.deadT > 0.55) {
-      // restart button
-      const bw = 110;
-      const bh = 36;
-      const bx = (W - bw) / 2;
-      const by = 300;
-      ctx.fillStyle = COLORS.outline;
-      ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
-      ctx.fillStyle = COLORS.button;
-      ctx.fillRect(bx, by, bw, bh);
-      ctx.fillStyle = COLORS.buttonDark;
-      ctx.fillRect(bx, by + bh - 6, bw, 6);
-      drawOutlinedText(ctx, "OK", W / 2, by + 26, 20, "#fff");
-      drawOutlinedText(ctx, "TAP TO RESTART", W / 2, 360, 14, "#fff");
+      drawButton(ctx, (W - 96) / 2, 296, 96, 32, "OK");
+      if (Math.floor(this.deadT * 2) % 2 === 0) {
+        drawText(ctx, "TAP TO RESTART", W / 2, 348, { scale: 2 });
+      }
     }
   }
 
   _medalFor(score) {
-    if (score >= 40) return COLORS.medalPlatinum;
-    if (score >= 30) return COLORS.medalGold;
-    if (score >= 20) return COLORS.medalSilver;
-    if (score >= 10) return COLORS.medalBronze;
+    if (score >= 40) return "platinum";
+    if (score >= 30) return "gold";
+    if (score >= 20) return "silver";
+    if (score >= 10) return "bronze";
     return null;
   }
 }
