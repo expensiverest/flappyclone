@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate Flappy Clone
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Required files exist
+        run: |
+          set -euo pipefail
+          test -f index.html
+          test -f css/style.css
+          test -f js/main.js
+          test -f js/game.js
+          test -f js/sprites.js
+          test -f README.md
+
+      - name: HTML contains canvas mount
+        run: |
+          set -euo pipefail
+          grep -q 'id="game"' index.html
+          grep -q 'js/main.js' index.html
+
+      - name: JavaScript syntax check
+        run: |
+          set -euo pipefail
+          node --check js/main.js
+          node --check js/game.js
+          node --check js/sprites.js
+
+      - name: No secrets in source
+        run: |
+          set -euo pipefail
+          if grep -RInE '(api[_-]?key|secret[_-]?key|BEGIN RSA PRIVATE KEY)' --include='*.js' --include='*.html' --include='*.css' --include='*.yml' .; then
+            echo "Potential secret material found" >&2
+            exit 1
+          fi
